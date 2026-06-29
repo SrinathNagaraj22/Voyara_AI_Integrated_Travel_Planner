@@ -1,0 +1,15 @@
+# Netlify edge rules. This file ships with the static bundle (Vite copies
+# everything in /public verbatim into dist/), so it always overrides any
+# missing or unparsed netlify.toml.
+#
+# Syntax: <from>  <to>  <status>  [conditions]
+# `200!` means rewrite (proxy) AND force, even if a file at the same path exists.
+
+# Proxy /api/* and /actuator/health to the EC2 backend (HTTP). The browser
+# only sees same-origin HTTPS requests to Netlify; the HTTP leg is server-to-server.
+/api/*               http://13.51.170.87/api/:splat               200!
+/actuator/health     http://13.51.170.87/actuator/health          200!
+
+# SPA fallback: serve index.html for any other path so React Router owns
+# client-side routing.
+/*                   /index.html                                  200

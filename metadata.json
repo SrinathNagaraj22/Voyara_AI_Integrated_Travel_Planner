@@ -1,0 +1,6 @@
+{
+  "name": "Voyara",
+  "description": "Voyara is a dark premium AI-powered group travel platform to organize shared trips, share social travel feed posts, request to join groups, and generate smart custom itineraries using Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

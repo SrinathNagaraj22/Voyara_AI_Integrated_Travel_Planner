@@ -1,0 +1,87 @@
+# Single-host compose for the EC2 box (Netlify hosts the frontend).
+#
+# Differences from the canonical server/docker-compose.yml:
+#   - No `frontend` service (Netlify owns the static bundle).
+#   - `backend` is built from local source on the box for the first deploy.
+#     Once you push images to Docker Hub via the GitHub workflow, you can
+#     drop `build:` and switch back to plain `image:`.
+#   - A `postgres` container is included as a quick start so the box runs
+#     end-to-end. Migrate to RDS / Neon / Supabase before you have real
+#     users, and point SPRING_DATASOURCE_URL at it.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: voyara-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-voyara}
+      POSTGRES_USER: ${POSTGRES_USER:-voyara}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - voyara-pgdata:/var/lib/postgresql/data
+    networks:
+      - voyara-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-voyara} -d ${POSTGRES_DB:-voyara}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    image: ${BACKEND_IMAGE:-voyara-backend:local}
+    build:
+      context: ../backend
+    container_name: voyara-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SERVER_PORT: 8080
+
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+
+      VOYARA_JWT_SECRET: ${VOYARA_JWT_SECRET}
+      VOYARA_JWT_EXPIRATION_MS: ${VOYARA_JWT_EXPIRATION_MS:-86400000}
+
+      # The cookie travels back to the browser through Netlify's HTTPS edge,
+      # so from the browser's perspective it's a Secure HTTPS response.
+      VOYARA_COOKIE_SECURE: ${VOYARA_COOKIE_SECURE:-true}
+      VOYARA_COOKIE_SAMESITE: ${VOYARA_COOKIE_SAMESITE:-Lax}
+
+      # The Netlify proxy makes /api calls look same-origin to the browser,
+      # so CORS rarely fires. We still list the Netlify origin and the bare
+      # EC2 IP as a safety net in case anyone hits the backend directly.
+      VOYARA_CORS_ORIGINS: ${VOYARA_CORS_ORIGINS}
+
+      VOYARA_GOOGLE_CLIENT_ID: ${VOYARA_GOOGLE_CLIENT_ID:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      JAVA_OPTS: ${JAVA_OPTS:-}
+    expose:
+      - "8080"
+    networks:
+      - voyara-net
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: voyara-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/ec2.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+    networks:
+      - voyara-net
+
+volumes:
+  voyara-pgdata:
+
+networks:
+  voyara-net:
+    driver: bridge

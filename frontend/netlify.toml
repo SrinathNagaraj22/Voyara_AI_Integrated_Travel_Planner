@@ -1,0 +1,40 @@
+# Netlify build + proxy config for Voyara frontend.
+#
+# Architecture: static SPA on Netlify (HTTPS) + Spring Boot on EC2 (HTTP).
+# A proxy redirect makes the browser see same-origin HTTPS for /api/* calls,
+# avoiding both mixed-content blocks and CORS. The HTTP backend call happens
+# server-to-server from Netlify's edge.
+
+[build]
+  base    = "frontend"
+  command = "npm install --no-audit --no-fund && npm run build"
+  publish = "dist"
+
+[build.environment]
+  # Netlify reads any VITE_* var as a build env. Set the real value in the
+  # Netlify UI: Site settings → Environment variables → Add a variable.
+  NODE_VERSION = "20"
+
+# Same-origin proxy: /api/* on Netlify -> EC2 backend.
+# Update :to to whatever the EC2 box's public address becomes (or a domain
+# once you have one).
+[[redirects]]
+  from   = "/api/*"
+  to     = "http://13.51.170.87/api/:splat"
+  status = 200
+  force  = true
+
+# Proxy the actuator health endpoint too so uptime checks can hit a stable
+# Netlify URL instead of pinging EC2 directly.
+[[redirects]]
+  from   = "/actuator/health"
+  to     = "http://13.51.170.87/actuator/health"
+  status = 200
+  force  = true
+
+# SPA fallback — every unknown path serves index.html so client-side routing
+# keeps working on hard refresh.
+[[redirects]]
+  from   = "/*"
+  to     = "/index.html"
+  status = 200

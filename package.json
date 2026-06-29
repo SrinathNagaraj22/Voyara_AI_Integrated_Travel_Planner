@@ -1,0 +1,14 @@
+{
+  "name": "voyara",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Voyara: AI-powered group travel platform. React + Vite frontend, Spring Boot backend.",
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "dev:backend": "set -a && [ -f .env ] && . ./.env; set +a && cd backend && JAVA_HOME=\"$(/usr/libexec/java_home -v 17)\" mvn spring-boot:run",
+    "build": "npm --prefix frontend run build",
+    "build:backend": "cd backend && JAVA_HOME=\"$(/usr/libexec/java_home -v 17)\" mvn -DskipTests package",
+    "test:backend": "cd backend && JAVA_HOME=\"$(/usr/libexec/java_home -v 17)\" mvn test",
+    "lint": "npm --prefix frontend run lint"
+  }
+}

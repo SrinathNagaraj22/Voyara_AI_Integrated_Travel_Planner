@@ -1,0 +1,183 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Spring Boot)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    # We spin Postgres up as a service so the Flyway smoke step at the
+    # bottom can target it. The H2-based unit tests deliberately do NOT
+    # see SPRING_DATASOURCE_* env vars — they pin H2 in
+    # application-test.properties, and if Postgres URLs leak through,
+    # the H2 driver fails with "claims to not accept jdbcUrl".
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: voyara
+          POSTGRES_PASSWORD: voyara
+          POSTGRES_DB: voyara
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U voyara -d voyara"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Build + unit/integration tests (H2 test profile)
+        env:
+          # Only secret tests need is the JWT; everything else is in application-test.properties.
+          VOYARA_JWT_SECRET: ci-jwt-secret-must-be-at-least-32-characters-long
+        run: mvn -B -ntp verify
+
+      - name: Boot prod profile against Postgres (Flyway + Security smoke)
+        env:
+          SPRING_PROFILES_ACTIVE: prod
+          SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/voyara
+          SPRING_DATASOURCE_USERNAME: voyara
+          SPRING_DATASOURCE_PASSWORD: voyara
+          VOYARA_JWT_SECRET: ci-jwt-secret-must-be-at-least-32-characters-long
+          VOYARA_CORS_ORIGINS: http://localhost
+          SERVER_PORT: "8080"
+        run: |
+          # Build the jar from this checkout (verify already compiled, but
+          # tests skipped this time so we don't rerun H2 tests).
+          mvn -B -ntp -DskipTests -q package
+          JAR=$(ls target/backend-*.jar | head -1)
+
+          # Boot the full app (including Spring Security web context). Flyway
+          # runs at startup; if migrations fail, the JVM exits non-zero and
+          # we report it. If it boots, we hit /actuator/health and exit clean.
+          nohup java -jar "$JAR" \
+            --spring.flyway.enabled=true \
+            --spring.jpa.hibernate.ddl-auto=validate \
+            --spring.main.banner-mode=off \
+            > boot.log 2>&1 &
+          PID=$!
+
+          # Wait up to 90s for /actuator/health to report UP.
+          ok=0
+          for i in $(seq 1 90); do
+            if ! kill -0 $PID 2>/dev/null; then
+              echo "::error::Backend process exited before becoming healthy"
+              break
+            fi
+            if curl -sf http://127.0.0.1:8080/actuator/health | grep -q '"status":"UP"'; then
+              echo "Backend healthy after ${i}s"
+              ok=1
+              break
+            fi
+            sleep 1
+          done
+
+          # Shut down cleanly so the next step (jar upload) isn't blocked.
+          kill $PID 2>/dev/null || true
+          wait $PID 2>/dev/null || true
+
+          if [ "$ok" != "1" ]; then
+            echo "::group::boot.log (tail)"
+            tail -120 boot.log
+            echo "::endgroup::"
+            exit 1
+          fi
+
+          # Defense in depth: surface any Flyway error markers even if
+          # /health was up (it shouldn't be, but logs don't lie).
+          if grep -E "FlywayException|Migration .* failed|APPLICATION FAILED TO START" boot.log; then
+            echo "::error::Backend log contains failure markers"
+            tail -120 boot.log
+            exit 1
+          fi
+          echo "Smoke OK"
+
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-jar
+          path: backend/target/backend-*.jar
+          if-no-files-found: error
+
+  frontend:
+    name: Frontend (Vite)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm install --no-audit --no-fund
+
+      - name: Type-check
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          if-no-files-found: error
+
+  docker-images:
+    name: Docker images build (no push)
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          tags: voyara-backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          tags: voyara-frontend:ci
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend

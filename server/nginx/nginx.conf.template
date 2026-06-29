@@ -1,0 +1,47 @@
+events {}
+
+http {
+  upstream backend_app  { least_conn; server backend:8080; }
+  upstream frontend_app { least_conn; server frontend:8080; }
+
+  # Path-based routing on a single :80 listener (IP-only deploy, no TLS).
+  # /api/*    -> Spring Boot
+  # /actuator/health -> Spring Boot (so nginx can probe upstream)
+  # everything else -> Vite static bundle served by frontend nginx
+  server {
+    listen 80 default_server;
+    server_name _;
+
+    # Modest body cap; presigned uploads (if any) should go direct to S3.
+    client_max_body_size 25m;
+
+    # Backend cookies are HttpOnly already; X-Frame-Options/CTO are defense in depth.
+    add_header X-Frame-Options DENY always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    location /api/ {
+      proxy_pass http://backend_app;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /actuator/health {
+      proxy_pass http://backend_app;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+    }
+
+    location / {
+      proxy_pass http://frontend_app;
+      proxy_http_version 1.1;
+      proxy_set_header Host $host;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Forwarded-Proto $scheme;
+    }
+  }
+}

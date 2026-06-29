@@ -1,0 +1,56 @@
+# Production stack: backend + frontend + Postgres, all containerized.
+# Usage:
+#   1. Copy .env.example to .env and set strong values for VOYARA_JWT_SECRET,
+#      POSTGRES_PASSWORD, SPRING_DATASOURCE_PASSWORD.
+#   2. docker-compose -f docker-compose.prod.yml up -d --build
+#
+# Frontend is exposed on :80; backend is reachable only through the frontend nginx.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-voyara}
+      POSTGRES_USER: ${POSTGRES_USER:-voyara}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    volumes:
+      - voyara-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-voyara} -d ${POSTGRES_DB:-voyara}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-voyara}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-voyara}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      VOYARA_JWT_SECRET: ${VOYARA_JWT_SECRET:?VOYARA_JWT_SECRET must be set (>= 32 chars)}
+      VOYARA_JWT_EXPIRATION_MS: ${VOYARA_JWT_EXPIRATION_MS:-86400000}
+      VOYARA_COOKIE_SECURE: ${VOYARA_COOKIE_SECURE:-true}
+      VOYARA_COOKIE_SAMESITE: ${VOYARA_COOKIE_SAMESITE:-Lax}
+      VOYARA_CORS_ORIGINS: ${VOYARA_CORS_ORIGINS:-http://localhost}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    expose:
+      - "8080"
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${PUBLIC_PORT:-80}:80"
+
+volumes:
+  voyara-pgdata:
