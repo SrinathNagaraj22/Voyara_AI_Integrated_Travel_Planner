@@ -1,8 +1,8 @@
-# Proxy API requests to the new Render backend
+# Proxy API requests to the Render backend
 /api/*  https://voyara-ai-integrated-travel-planner-2.onrender.com/api/:splat  200!
 
 # Backend health check
 /actuator/health  https://voyara-ai-integrated-travel-planner-2.onrender.com/actuator/health  200!
 
-# React Router SPA fallback
+# React Router fallback
 /*  /index.html  200
